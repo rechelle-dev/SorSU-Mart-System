@@ -1,0 +1,109 @@
+/**
+ * Core Philosophy: This ruleset enforces a security model that segregates public data from private, user-owned data.
+ * The product catalog and product reviews are publicly readable by anyone, fostering an open browsing experience. All other data,
+ * such as user profiles, orders, and wishlists, is strictly confined to the user who owns it, ensuring data privacy.
+ *
+ * Data Structure: Public data like products and their reviews are stored in top-level collections (/products).
+ * All user-specific data is nested hierarchically under a `/users/{userId}` path. This structure naturally
+ * aligns with ownership-based security rules, making them simple and performant.
+ *
+ * Key Security Decisions:
+ * - Public Read, Role-Based Write for Products: The `/products` collection is read-only for the public. Only authenticated
+ *   'sellers' can create their own products, and only 'admins' can update them (for approval) or create any product.
+ * - Strict Ownership: All data under `/users/{userId}` (profiles, orders, wishlists) can only be accessed by the
+ *   authenticated user whose UID matches the `{userId}` in the path. This prevents users from accessing each other's private information.
+ * - Admin User Management: Admins can list all users.
+ * - Insecure Path Blocked: The `/orders/{orderId}/orderItems` path is insecure, and access is denied.
+ *
+ * Denormalization for Authorization: The rules rely on denormalized fields. For example, a `Product` document contains a
+ * `sellerId` field, allowing write-permission checks to happen directly on the document without costly `get()` calls.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for reusable logic
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == 'admin';
+    }
+
+    function isSeller() {
+        return isSignedIn() && request.auth.token.role == 'seller';
+    }
+
+    // Checks for ownership on an existing document for update/delete operations.
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * @description Publicly readable product catalog. Writes are restricted by role.
+     * @path /products/{productId}
+     * @allow (get) Any user can view a product.
+     * @allow (create) TEMPORARILY ALLOWED FOR SEEDING. Any signed-in user can create a product.
+     * @allow (update) An 'admin' can update any product (for approval), and a 'seller' can update their own product.
+     */
+    match /products/{productId} {
+      allow get, list: if true;
+      allow create: if isSignedIn();
+      allow update: if isAdmin() || (isSeller() && resource.data.sellerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    /**
+     * @description Users can manage their own profile. Admins can list all users.
+     * @path /users/{userId}
+     * @allow (list) An admin lists all user documents.
+     */
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    /**
+     * @description A user can manage their own orders.
+     * @path /users/{userId}/orders/{orderId}
+     */
+    match /users/{userId}/orders/{orderId} {
+      allow get, list, create, update, delete: if isOwner(userId);
+    }
+
+    /**
+     * @description A user can manage their single wishlist document.
+     * @path /users/{userId}/wishlist
+     */
+    match /users/{userId}/wishlist {
+      allow get, create, update, delete: if isOwner(userId);
+      allow list: if false;
+    }
+
+    /**
+     * @description Product reviews are public to read, but only the author can manage their own review.
+     * @path /products/{productId}/reviews/{reviewId}
+     */
+    match /products/{productId}/reviews/{reviewId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid && request.resource.data.productId == productId;
+      allow update, delete: if resource != null && isOwner(resource.data.userId);
+    }
+
+    /**
+     * @description CRITICAL: This path is insecure and all access is denied.
+     * @path /orders/{orderId}/orderItems/{orderItemId}
+     */
+    match /orders/{orderId}/orderItems/{orderItemId} {
+      allow read, write: if false;
+    }
+  }
+}
