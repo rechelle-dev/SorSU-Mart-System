@@ -52,7 +52,7 @@ Browse and Buy: Any visitor can sign up for a "Shopper" account. They can:
 
 • Technologies/Frameworks Used:
 
-  We used Firebase Studio
+  We used Firebase Studio.
   Firebase Studio Website Link : 
   https://9000-firebase-studio-1765525461391.cluster-bg6uurscprhn6qxr6xwtrhvkf6.cloudworkstations.dev/
 
